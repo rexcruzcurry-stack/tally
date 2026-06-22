@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   Receipt, FolderPlus, BookOpen, BarChart3, Plus, Trash2, X,
-  ArrowDownRight, ArrowUpRight, Store, ChevronRight, RotateCcw, Check, Folder
+  ArrowDownRight, ArrowUpRight, Store, ChevronRight, RotateCcw, Check, Pencil,
+  Download, Upload, Printer, ArrowUpDown
 } from "lucide-react";
 
 /* ----------------------------- constants ----------------------------- */
@@ -101,6 +102,8 @@ export default function App(){
   },[currency]);
 
   const flash=msg=>{setToast(msg);setTimeout(()=>setToast(null),2600);};
+  const goLedger=pid=>{window.__tallySelected=pid;setTab("ledger");};
+  const goInput=pid=>{if(pid)window.__inputSelected=pid;setTab("input");};
 
   const totalsFor=pid=>{
     let revenue=0,expense=0,count=0;
@@ -137,17 +140,26 @@ export default function App(){
     flash(`${entry.type==="revenue"?"Revenue":"Expense"} receipt saved`);
   };
   const deleteEntry=id=>saveEntries(entries.filter(e=>e.id!==id));
+  const updateEntry=(id,patch)=>{
+    saveEntries(entries.map(e=>e.id===id?{...e,...patch}:e));
+    flash("Entry updated");
+  };
+  const importEntries=newEntries=>{
+    if(!newEntries.length){flash("Nothing to import — check the CSV format");return;}
+    saveEntries([...newEntries.map(e=>({...e,id:uid(),createdAt:Date.now()})),...entries]);
+    flash(`${newEntries.length} receipt${newEntries.length===1?"":"s"} imported`);
+  };
 
   if(!loaded) return <div className="app"><Styles/><div className="loading">Opening the books…</div></div>;
 
   return(
     <div className="app">
       <Styles/>
-      <header className="topbar">
+      <header className="topbar no-print">
         <div className="brand">
           <div className="mark"><BookOpen size={20} strokeWidth={2.2}/></div>
           <div>
-            <div className="brandname">Tally</div>
+            <div className="brandname">Project Ledger</div>
             <div className="tagline">Project expense &amp; revenue ledger</div>
           </div>
         </div>
@@ -159,31 +171,29 @@ export default function App(){
         </label>
       </header>
 
-      <nav className="tabs" role="tablist">
-        <Tab id="input" tab={tab} setTab={setTab} icon={<Receipt size={16}/>} label="Input"/>
-        <Tab id="ledger" tab={tab} setTab={setTab} icon={<BookOpen size={16}/>} label="Project Ledger"/>
-        <Tab id="projects" tab={tab} setTab={setTab} icon={<Folder size={16}/>} label="Projects"/>
+      <nav className="tabs no-print" role="tablist">
+        <Tab id="input" tab={tab} setTab={setTab} icon={<Receipt size={16}/>} label="Add Input"/>
+        <Tab id="ledger" tab={tab} setTab={setTab} icon={<BookOpen size={16}/>} label="Projects" wide/>
         <Tab id="overview" tab={tab} setTab={setTab} icon={<BarChart3 size={16}/>} label="Overview"/>
       </nav>
 
       <main className="panel">
-        {tab==="input"&&<InputTab projects={projects} addEntry={addEntry} goProjects={()=>setTab("projects")}/>}
+        {tab==="input"&&<InputTab projects={projects} addEntry={addEntry} addProject={addProject} goLedger={goLedger}/>}
         {tab==="ledger"&&<LedgerTab projects={projects} entries={entries} totalsFor={totalsFor}
-          fmt={fmt} deleteEntry={deleteEntry} goInput={()=>setTab("input")} goProjects={()=>setTab("projects")}/>}
-        {tab==="projects"&&<ProjectsTab projects={projects} totalsFor={totalsFor} fmt={fmt}
-          addProject={addProject} deleteProject={deleteProject}/>}
+          fmt={fmt} deleteEntry={deleteEntry} updateEntry={updateEntry} importEntries={importEntries}
+          addProject={addProject} deleteProject={deleteProject} goInput={goInput}/>}
         {tab==="overview"&&<OverviewTab projects={projects} grand={grand} totalsFor={totalsFor}
-          fmt={fmt} openLedger={pid=>{window.__tallySelected=pid;setTab("ledger");}}/>}
+          fmt={fmt} openLedger={goLedger}/>}
       </main>
 
-      {toast&&<div className="toast"><Check size={15}/> {toast}</div>}
+      {toast&&<div className="toast no-print"><Check size={15}/> {toast}</div>}
     </div>
   );
 }
 
-function Tab({id,tab,setTab,icon,label}){
+function Tab({id,tab,setTab,icon,label,wide}){
   return(
-    <button role="tab" aria-selected={tab===id} className={"tab"+(tab===id?" active":"")} onClick={()=>setTab(id)}>
+    <button role="tab" aria-selected={tab===id} className={"tab"+(tab===id?" active":"")+(wide?" wide":"")} onClick={()=>setTab(id)}>
       {icon}<span>{label}</span>
     </button>
   );
@@ -237,8 +247,10 @@ function ItemRow({item,idx,onChange,onRemove,canRemove}){
 /* =====================================================================
    Input tab
 ===================================================================== */
-function InputTab({projects,addEntry,goProjects}){
-  const [projectId,setProjectId]=useState(projects[0]?.id||"");
+function InputTab({projects,addEntry,addProject,goLedger}){
+  const initial=(typeof window!=="undefined"&&window.__inputSelected)||projects[0]?.id||"";
+  const [projectId,setProjectId]=useState(initial);
+  const [showAddProject,setShowAddProject]=useState(false);
   const [type,setType]=useState("expense");
   const [category,setCategory]=useState(EXPENSE_CATEGORIES[0]);
   const [items,setItems]=useState([blankItem(0)]);
@@ -248,6 +260,19 @@ function InputTab({projects,addEntry,goProjects}){
   const [vendorAddress,setVendorAddress]=useState("");
   const [notes,setNotes]=useState("");
   const [errors,setErrors]=useState({});
+
+  const handleAddProject=(name,desc)=>{
+    const newId=addProject(name,desc);
+    setProjectId(newId);
+    setShowAddProject(false);
+  };
+
+  useEffect(()=>{
+    if(typeof window!=="undefined"&&window.__inputSelected){
+      setProjectId(window.__inputSelected);
+      window.__inputSelected=null;
+    }
+  },[]);
 
   const cats=type==="revenue"?REVENUE_CATEGORIES:EXPENSE_CATEGORIES;
 
@@ -296,9 +321,11 @@ function InputTab({projects,addEntry,goProjects}){
   };
 
   if(projects.length===0) return(
-    <Empty icon={<FolderPlus size={26}/>} title="No projects yet"
-      body="Every receipt belongs to a project. Register your first project to start logging expenses and revenue."
-      action={<button className="btn btn-primary" onClick={goProjects}><Plus size={16}/> Go to Projects</button>}/>
+    <div className="ledger-empty-onboard">
+      <Empty icon={<FolderPlus size={26}/>} title="No projects yet"
+        body="Every receipt belongs to a project. Register your first one to start logging expenses and revenue."/>
+      <ProjectQuickAdd onAdd={handleAddProject} onCancel={null}/>
+    </div>
   );
 
   return(
@@ -320,9 +347,18 @@ function InputTab({projects,addEntry,goProjects}){
 
       <div className="row2">
         <Field label="Project" error={errors.projectId}>
-          <select className="input" value={projectId} onChange={e=>setProjectId(e.target.value)}>
+          <select className="input" value={projectId}
+            onChange={e=>e.target.value==="__new__"?setShowAddProject(true):setProjectId(e.target.value)}>
             {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+            <option value="__new__">+ New project…</option>
           </select>
+          {showAddProject?(
+            <ProjectQuickAdd onAdd={handleAddProject} onCancel={()=>setShowAddProject(false)}/>
+          ):projectId&&(
+            <button type="button" className="field-link" onClick={()=>goLedger(projectId)}>
+              View this project's ledger <ChevronRight size={12}/>
+            </button>
+          )}
         </Field>
         <Field label="Category">
           <select className="input" value={category} onChange={e=>setCategory(e.target.value)}>
@@ -390,26 +426,155 @@ function InputTab({projects,addEntry,goProjects}){
   );
 }
 
+/* ----------------------------- export ------------------------------- */
+const csvCell=v=>{
+  const s=String(v??"");
+  return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;
+};
+const exportProjectCSV=(project,list)=>{
+  const header=["Type","Date","Category","Vendor","Item","Quantity","Cost Per Unit","Item Total","Receipt Total","Notes"];
+  const rows=[header];
+  for(const e of list){
+    for(const it of e.items||[]){
+      rows.push([
+        e.type==="revenue"?"Revenue":"Expense",e.date,e.category,e.vendorName||"",
+        it.itemName,it.quantity,it.costPerUnit,it.totalCost,e.totalCost,e.notes||"",
+      ]);
+    }
+  }
+  const csv=rows.map(r=>r.map(csvCell).join(",")).join("\n");
+  const blob=new Blob([csv],{type:"text/csv;charset=utf-8;"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download=`${project.name.replace(/[^a-z0-9]+/gi,"-").toLowerCase()||"project"}-ledger.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+/* ----------------------------- import ------------------------------- */
+const parseCSV=text=>{
+  const rows=[];
+  let row=[],field="",inQuotes=false;
+  for(let i=0;i<text.length;i++){
+    const c=text[i];
+    if(inQuotes){
+      if(c==='"'){ if(text[i+1]==='"'){field+='"';i++;} else inQuotes=false; }
+      else field+=c;
+    }else{
+      if(c==='"') inQuotes=true;
+      else if(c===","){row.push(field);field="";}
+      else if(c==="\n"){row.push(field);rows.push(row);row=[];field="";}
+      else if(c==="\r"){/*skip*/}
+      else field+=c;
+    }
+  }
+  if(field.length||row.length){row.push(field);rows.push(row);}
+  return rows.filter(r=>r.length>1||r[0]);
+};
+const entriesFromCSV=text=>{
+  const rows=parseCSV(text);
+  if(rows.length<2) return [];
+  const header=rows[0].map(h=>h.trim());
+  const col=name=>header.indexOf(name);
+  const iType=col("Type"),iDate=col("Date"),iCat=col("Category"),iVendor=col("Vendor"),
+    iItem=col("Item"),iQty=col("Quantity"),iCost=col("Cost Per Unit"),
+    iItemTotal=col("Item Total"),iReceiptTotal=col("Receipt Total"),iNotes=col("Notes");
+  if(iType<0||iDate<0||iCat<0||iItem<0) return [];
+
+  const groups=new Map();
+  const order=[];
+  for(let r=1;r<rows.length;r++){
+    const c=rows[r];
+    if(!c.some(Boolean)) continue;
+    const type=(c[iType]||"").trim().toLowerCase()==="revenue"?"revenue":"expense";
+    const date=c[iDate]||todayStr();
+    const category=c[iCat]||(type==="revenue"?REVENUE_CATEGORIES[0]:EXPENSE_CATEGORIES[0]);
+    const vendorName=(iVendor>=0?c[iVendor]:"")||"";
+    const notes=(iNotes>=0?c[iNotes]:"")||"";
+    const receiptTotal=iReceiptTotal>=0?num(c[iReceiptTotal]):0;
+    const key=[type,date,category,vendorName,notes,receiptTotal].join("|");
+    if(!groups.has(key)){
+      groups.set(key,{type,date,category,vendorName,vendorContact:"",vendorAddress:"",notes,items:[],totalCost:receiptTotal});
+      order.push(key);
+    }
+    const costPerUnit=num(c[iCost]),quantity=num(c[iQty])||1;
+    groups.get(key).items.push({
+      id:uid(),
+      itemName:(c[iItem]||"").trim(),
+      costPerUnit,quantity,
+      totalCost:iItemTotal>=0?num(c[iItemTotal]):costPerUnit*quantity,
+    });
+  }
+  return order.map(key=>{
+    const g=groups.get(key);
+    return {...g,totalCost:g.totalCost||g.items.reduce((s,it)=>s+it.totalCost,0)};
+  });
+};
+
 /* =====================================================================
    Project Ledger tab
 ===================================================================== */
-function LedgerTab({projects,entries,totalsFor,fmt,deleteEntry,goInput,goProjects}){
+const PROJECT_SORTS=[
+  {id:"name-asc",label:"Name (A–Z)"},
+  {id:"name-desc",label:"Name (Z–A)"},
+  {id:"net-desc",label:"Highest net"},
+  {id:"net-asc",label:"Lowest net"},
+  {id:"count-desc",label:"Most receipts"},
+  {id:"newest",label:"Newest first"},
+  {id:"oldest",label:"Oldest first"},
+];
+
+function LedgerTab({projects,entries,totalsFor,fmt,deleteEntry,updateEntry,importEntries,addProject,deleteProject,goInput}){
   const initial=(typeof window!=="undefined"&&window.__tallySelected)||projects[0]?.id||"";
   const [pid,setPid]=useState(initial);
+  const [hasSelected,setHasSelected]=useState(()=>typeof window!=="undefined"&&!!window.__tallySelected);
   const [confirmId,setConfirmId]=useState(null);
+  const [confirmProjectId,setConfirmProjectId]=useState(null);
   const [expanded,setExpanded]=useState({});
+  const [editId,setEditId]=useState(null);
+  const [sortBy,setSortBy]=useState("name-asc");
+  const [showAddProject,setShowAddProject]=useState(false);
+  const fileRef=useRef(null);
+
+  const selectProject=newPid=>{setPid(newPid);setHasSelected(true);};
 
   useEffect(()=>{
     if(typeof window!=="undefined"&&window.__tallySelected){
       setPid(window.__tallySelected);
+      setHasSelected(true);
       window.__tallySelected=null;
     }
   },[]);
 
+  const sortedProjects=useMemo(()=>{
+    const withTotals=projects.map(p=>({p,t:totalsFor(p.id)}));
+    const by={
+      "name-asc":(a,b)=>a.p.name.localeCompare(b.p.name),
+      "name-desc":(a,b)=>b.p.name.localeCompare(a.p.name),
+      "net-desc":(a,b)=>b.t.net-a.t.net,
+      "net-asc":(a,b)=>a.t.net-b.t.net,
+      "count-desc":(a,b)=>b.t.count-a.t.count,
+      "newest":(a,b)=>b.p.createdAt-a.p.createdAt,
+      "oldest":(a,b)=>a.p.createdAt-b.p.createdAt,
+    }[sortBy];
+    return withTotals.sort(by).map(x=>x.p);
+  },[projects,totalsFor,sortBy]);
+
+  const handleAddProject=(name,desc)=>{
+    const newId=addProject(name,desc);
+    selectProject(newId);
+    setShowAddProject(false);
+  };
+
   if(projects.length===0) return(
-    <Empty icon={<FolderPlus size={26}/>} title="No projects yet"
-      body="Register a project, then log receipts to see them gathered here."
-      action={<button className="btn btn-primary" onClick={goProjects}><Plus size={16}/> Go to Projects</button>}/>
+    <div className="ledger-empty-onboard">
+      <Empty icon={<FolderPlus size={26}/>} title="No projects yet"
+        body="Register your first project to start logging receipts."/>
+      <ProjectQuickAdd onAdd={handleAddProject} onCancel={null}/>
+    </div>
   );
 
   const valid=projects.some(p=>p.id===pid)?pid:projects[0].id;
@@ -420,46 +585,136 @@ function LedgerTab({projects,entries,totalsFor,fmt,deleteEntry,goInput,goProject
   const expense=list.filter(e=>e.type==="expense");
   const toggleExpand=id=>setExpanded(prev=>({...prev,[id]:!prev[id]}));
 
+  const handleImportFile=ev=>{
+    const file=ev.target.files?.[0];
+    if(!file) return;
+    const reader=new FileReader();
+    reader.onload=()=>importEntries(entriesFromCSV(String(reader.result||"")).map(g=>({...g,projectId:valid})));
+    reader.readAsText(file);
+    ev.target.value="";
+  };
+
   return(
-    <div>
-      <div className="pill-row">
-        {projects.map(p=>(
-          <button key={p.id} className={"pill"+(p.id===valid?" on":"")} onClick={()=>setPid(p.id)}>{p.name}</button>
+    <div className={"ledger-shell"+(hasSelected?" is-selected":"")}>
+      <div className={"ledger-projects no-print"+(hasSelected?"":" intro")}>
+        <div className="lp-head">
+          <span className="block-label">Select project</span>
+          <label className="lp-sort">
+            <ArrowUpDown size={13}/>
+            <select value={sortBy} onChange={e=>setSortBy(e.target.value)} aria-label="Sort projects">
+              {PROJECT_SORTS.map(s=><option key={s.id} value={s.id}>{s.label}</option>)}
+            </select>
+          </label>
+        </div>
+
+        {sortedProjects.map(p=>(
+          <div className="lp-row" key={p.id}>
+            <button className={"pill"+(p.id===valid&&hasSelected?" on":"")} onClick={()=>selectProject(p.id)}>{p.name}</button>
+            {confirmProjectId===p.id?(
+              <span className="confirm">
+                <button className="mini danger" onClick={()=>{deleteProject(p.id);setConfirmProjectId(null);}}>Delete</button>
+                <button className="mini" onClick={()=>setConfirmProjectId(null)}>Keep</button>
+              </span>
+            ):(
+              <button className="icon-btn lp-del" aria-label={`Delete ${p.name}`} onClick={()=>setConfirmProjectId(p.id)}><Trash2 size={13}/></button>
+            )}
+          </div>
         ))}
+
+        {showAddProject?(
+          <ProjectQuickAdd onAdd={handleAddProject} onCancel={()=>setShowAddProject(false)}/>
+        ):(
+          <button className="lp-add" onClick={()=>setShowAddProject(true)}><Plus size={14}/> New project</button>
+        )}
       </div>
 
-      <div className="ledger-summary card">
-        <div className="ls-name">
-          <span className="eyebrow">Project ledger</span>
-          <h2>{project.name}</h2>
-          {project.description&&<p className="card-sub">{project.description}</p>}
-        </div>
-        <div className="ls-figs">
-          <div className="ls-fig"><span className="rev-dot"/>Revenue<b className="mono rev">{fmt(t.revenue)}</b></div>
-          <div className="ls-fig"><span className="exp-dot"/>Expense<b className="mono exp">{fmt(t.expense)}</b></div>
-          <div className="ls-fig net"><span>Net</span><b className={"mono "+(t.net>=0?"rev":"exp")}>{fmt(t.net)}</b></div>
-        </div>
-      </div>
+      {hasSelected&&(
+        <div id="ledger-print-area" className="ledger-content">
+          <div className="ledger-summary card">
+            <div className="ls-name">
+              <span className="eyebrow">Project ledger</span>
+              <h2>{project.name}</h2>
+              {project.description&&<p className="card-sub">{project.description}</p>}
+            </div>
+            <div className="ls-figs">
+              <div className="ls-fig"><span className="rev-dot"/>Revenue<b className="mono rev">{fmt(t.revenue)}</b></div>
+              <div className="ls-fig"><span className="exp-dot"/>Expense<b className="mono exp">{fmt(t.expense)}</b></div>
+              <div className="ls-fig net"><span>Net</span><b className={"mono "+(t.net>=0?"rev":"exp")}>{fmt(t.net)}</b></div>
+            </div>
+            <div className="ls-actions no-print">
+              <button className="btn btn-primary" onClick={()=>goInput(valid)}>
+                <Plus size={15}/> Add receipt
+              </button>
+              <button className="btn btn-ghost" disabled={list.length===0}
+                onClick={()=>exportProjectCSV(project,list)}>
+                <Download size={15}/> Export CSV
+              </button>
+              <button className="btn btn-ghost" disabled={list.length===0}
+                onClick={()=>window.print()}>
+                <Printer size={15}/> Export PDF
+              </button>
+              <button className="btn btn-ghost" onClick={()=>fileRef.current?.click()}>
+                <Upload size={15}/> Import CSV
+              </button>
+              <input ref={fileRef} type="file" accept=".csv,text/csv" hidden onChange={handleImportFile}/>
+            </div>
+          </div>
 
-      {list.length===0?(
-        <Empty small icon={<Receipt size={22}/>} title="No receipts filed"
-          body="This project has no entries yet."
-          action={<button className="btn btn-ghost" onClick={goInput}><Plus size={15}/> Add a receipt</button>}/>
-      ):(
-        <>
-          <LedgerSection title="Revenue" kind="rev" rows={revenue} fmt={fmt}
-            confirmId={confirmId} setConfirmId={setConfirmId} deleteEntry={deleteEntry}
-            subtotal={t.revenue} expanded={expanded} toggleExpand={toggleExpand}/>
-          <LedgerSection title="Expense" kind="exp" rows={expense} fmt={fmt}
-            confirmId={confirmId} setConfirmId={setConfirmId} deleteEntry={deleteEntry}
-            subtotal={t.expense} expanded={expanded} toggleExpand={toggleExpand}/>
-        </>
+          {list.length===0?(
+            <Empty small icon={<Receipt size={22}/>} title="No receipts filed"
+              body="This project has no entries yet."
+              action={<button className="btn btn-ghost" onClick={()=>goInput(valid)}><Plus size={15}/> Add a receipt</button>}/>
+          ):(
+            <>
+              <LedgerSection title="Revenue" kind="rev" rows={revenue} fmt={fmt} projects={projects}
+                confirmId={confirmId} setConfirmId={setConfirmId} deleteEntry={deleteEntry}
+                updateEntry={updateEntry} editId={editId} setEditId={setEditId}
+                subtotal={t.revenue} expanded={expanded} toggleExpand={toggleExpand}/>
+              <LedgerSection title="Expense" kind="exp" rows={expense} fmt={fmt} projects={projects}
+                confirmId={confirmId} setConfirmId={setConfirmId} deleteEntry={deleteEntry}
+                updateEntry={updateEntry} editId={editId} setEditId={setEditId}
+                subtotal={t.expense} expanded={expanded} toggleExpand={toggleExpand}/>
+            </>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-function LedgerSection({title,kind,rows,fmt,confirmId,setConfirmId,deleteEntry,subtotal,expanded,toggleExpand}){
+/* =====================================================================
+   Quick add-project form (used inline in the Ledger's project column)
+===================================================================== */
+function ProjectQuickAdd({onAdd,onCancel}){
+  const [name,setName]=useState("");
+  const [desc,setDesc]=useState("");
+  const [err,setErr]=useState("");
+
+  const submit=()=>{
+    if(!name.trim()){setErr("Give the project a name");return;}
+    onAdd(name,desc);
+    setName("");setDesc("");setErr("");
+  };
+
+  return(
+    <div className="lp-add-form">
+      <Field label="Project name" error={err} compact>
+        <input className="input" value={name} placeholder="e.g. Café Build-Out" autoFocus
+          onChange={e=>setName(e.target.value)}/>
+      </Field>
+      <Field label="Description (optional)" compact>
+        <textarea className="input textarea" rows={2} value={desc} placeholder="What is this project?"
+          onChange={e=>setDesc(e.target.value)}/>
+      </Field>
+      <div className="lp-add-actions">
+        {onCancel&&<button className="btn btn-ghost" onClick={onCancel}>Cancel</button>}
+        <button className="btn btn-primary" onClick={submit}><Plus size={15}/> Add project</button>
+      </div>
+    </div>
+  );
+}
+
+function LedgerSection({title,kind,rows,fmt,confirmId,setConfirmId,deleteEntry,updateEntry,editId,setEditId,subtotal,expanded,toggleExpand,projects}){
   return(
     <section className={"ledger-sec "+kind}>
       <div className="sec-head">
@@ -471,22 +726,31 @@ function LedgerSection({title,kind,rows,fmt,confirmId,setConfirmId,deleteEntry,s
       ):(
         <div className="rows">
           {rows.map(e=>{
-            const multiItem=e.items&&e.items.length>1;
-            const isExp=expanded[e.id];
+            const itemCount=e.items?.length||0;
+            const multiItem=itemCount>1;
+            const isExp=expanded[e.id]!==undefined?expanded[e.id]:true;
+            const isEditing=editId===e.id;
+
+            if(isEditing) return(
+              <div className="lrow-wrap" key={e.id}>
+                <EntryEditor entry={e} projects={projects}
+                  onSave={patch=>{updateEntry(e.id,patch);setEditId(null);}}
+                  onCancel={()=>setEditId(null)}/>
+              </div>
+            );
+
             return(
               <div className="lrow-wrap" key={e.id}>
                 <div className="lrow">
                   <div className="lr-left">
                     {/* receipt header line */}
                     <div className="lr-title">
-                      {multiItem?(
-                        <button className="expand-btn" onClick={()=>toggleExpand(e.id)}>
-                          <span className="expand-icon">{isExp?"▾":"▸"}</span>
-                          {e.items.length} items
-                        </button>
-                      ):(
-                        e.items?.[0]?.itemName||"(no description)"
-                      )}
+                      <button className="expand-btn" onClick={()=>toggleExpand(e.id)}>
+                        <span className="expand-icon">{isExp?"▾":"▸"}</span>
+                        {kind==="exp"
+                          ?(e.vendorName||(multiItem?`${itemCount} items`:(e.items?.[0]?.itemName||"(no description)")))
+                          :(multiItem?`${itemCount} items`:(e.items?.[0]?.itemName||"(no description)"))}
+                      </button>
                     </div>
                     <div className="lr-meta">
                       <span className="tagcat">{e.category}</span>
@@ -494,27 +758,26 @@ function LedgerSection({title,kind,rows,fmt,confirmId,setConfirmId,deleteEntry,s
                       <span className="mono dim">{e.date}</span>
                       {e.vendorName&&<><span className="dot">·</span><span className="dim">{e.vendorName}</span></>}
                     </div>
-                    {/* single-item shows qty detail inline */}
-                    {!multiItem&&e.items?.[0]&&num(e.items[0].quantity)!==1&&(
-                      <div className="lr-qty-hint">{e.items[0].quantity} × {fmt(e.items[0].costPerUnit)}</div>
-                    )}
                     {e.notes&&<div className="lr-note">{e.notes}</div>}
                   </div>
                   <div className="lr-right">
                     <span className={"lr-amt mono "+kind}>{fmt(e.totalCost)}</span>
                     {confirmId===e.id?(
-                      <span className="confirm">
+                      <span className="confirm no-print">
                         <button className="mini danger" onClick={()=>{deleteEntry(e.id);setConfirmId(null);}}>Delete</button>
                         <button className="mini" onClick={()=>setConfirmId(null)}>Keep</button>
                       </span>
                     ):(
-                      <button className="icon-btn" aria-label="Delete entry" onClick={()=>setConfirmId(e.id)}><Trash2 size={15}/></button>
+                      <span className="no-print">
+                        <button className="icon-btn" aria-label="Edit entry" onClick={()=>setEditId(e.id)}><Pencil size={15}/></button>
+                        <button className="icon-btn" aria-label="Delete entry" onClick={()=>setConfirmId(e.id)}><Trash2 size={15}/></button>
+                      </span>
                     )}
                   </div>
                 </div>
 
-                {/* expanded item list for multi-item receipts */}
-                {multiItem&&isExp&&(
+                {/* expanded itemized breakdown */}
+                {isExp&&(
                   <div className="item-breakdown">
                     {e.items.map((it,i)=>(
                       <div className="ibd-row" key={it.id||i}>
@@ -532,75 +795,125 @@ function LedgerSection({title,kind,rows,fmt,confirmId,setConfirmId,deleteEntry,s
         </div>
       )}
       <div className="subtotal">
-        <span>Subtotal</span><b className={"mono "+kind}>{fmt(subtotal)}</b>
+        <span>{kind==="rev"?"Total Revenue":"Total Expenses"}</span><b className={"mono "+kind}>{fmt(subtotal)}</b>
       </div>
     </section>
   );
 }
 
 /* =====================================================================
-   Projects tab
+   Entry editor (inline, used inside Project Ledger)
 ===================================================================== */
-function ProjectsTab({projects,totalsFor,fmt,addProject,deleteProject}){
-  const [name,setName]=useState("");
-  const [desc,setDesc]=useState("");
-  const [err,setErr]=useState("");
-  const [confirmId,setConfirmId]=useState(null);
+function EntryEditor({entry,projects,onSave,onCancel}){
+  const cats=entry.type==="revenue"?REVENUE_CATEGORIES:EXPENSE_CATEGORIES;
+  const [projectId,setProjectId]=useState(entry.projectId);
+  const [category,setCategory]=useState(entry.category);
+  const [date,setDate]=useState(entry.date);
+  const [vendorName,setVendorName]=useState(entry.vendorName||"");
+  const [vendorContact,setVendorContact]=useState(entry.vendorContact||"");
+  const [vendorAddress,setVendorAddress]=useState(entry.vendorAddress||"");
+  const [notes,setNotes]=useState(entry.notes||"");
+  const [items,setItems]=useState(()=>entry.items.map((it,i)=>({
+    id:it.id||uid(),
+    itemName:it.itemName||"",
+    costPerUnit:String(it.costPerUnit??""),
+    quantity:String(it.quantity??"1"),
+    totalOverride:Math.abs(num(it.costPerUnit)*num(it.quantity)-num(it.totalCost))>0.005?String(it.totalCost):null,
+    placeholder:ITEM_PLACEHOLDERS[i%ITEM_PLACEHOLDERS.length],
+  })));
+  const [errors,setErrors]=useState({});
 
-  const submit=()=>{
-    if(!name.trim()){setErr("Give the project a name");return;}
-    addProject(name,desc);setName("");setDesc("");setErr("");
+  const updateItem=(id,next)=>setItems(prev=>prev.map(i=>i.id===id?next:i));
+  const addItem=()=>setItems(prev=>[...prev,blankItem(prev.length)]);
+  const removeItem=id=>setItems(prev=>prev.filter(i=>i.id!==id));
+
+  const itemTotal=item=>item.totalOverride!==null?num(item.totalOverride):num(item.costPerUnit)*num(item.quantity);
+  const receiptTotal=items.reduce((s,i)=>s+itemTotal(i),0);
+
+  const save=()=>{
+    const itemErrs=items.map(i=>!i.itemName.trim()?"Required":"");
+    if(itemErrs.some(Boolean)){setErrors({items:itemErrs});return;}
+    onSave({
+      projectId,category,date,
+      items:items.map(i=>({
+        id:i.id,itemName:i.itemName.trim(),
+        costPerUnit:num(i.costPerUnit),quantity:num(i.quantity),totalCost:itemTotal(i),
+      })),
+      totalCost:receiptTotal,
+      vendorName:vendorName.trim(),vendorContact:vendorContact.trim(),vendorAddress:vendorAddress.trim(),
+      notes:notes.trim(),
+    });
   };
 
   return(
-    <div className="projects-grid">
-      <div className="card form-card">
-        <div className="card-head">
-          <span className="eyebrow">New project</span>
-          <h2>Register a project</h2>
-          <p className="card-sub">Projects are the buckets your receipts get filed into.</p>
-        </div>
-        <Field label="Project name" error={err}>
-          <input className="input" value={name} placeholder="e.g. Café Build-Out" onChange={e=>setName(e.target.value)}/>
+    <div className="entry-editor">
+      <div className="row2">
+        <Field label="Project">
+          <select className="input" value={projectId} onChange={e=>setProjectId(e.target.value)}>
+            {projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
         </Field>
-        <Field label="Description (optional)">
-          <textarea className="input textarea" rows={2} value={desc} placeholder="What is this project?" onChange={e=>setDesc(e.target.value)}/>
+        <Field label="Category">
+          <select className="input" value={category} onChange={e=>setCategory(e.target.value)}>
+            {cats.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
         </Field>
-        <button className="btn btn-primary full" onClick={submit}><Plus size={16}/> Add project</button>
+      </div>
+      <div className="row2">
+        <Field label="Date">
+          <input className="input mono" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
+        </Field>
+        <div/>
       </div>
 
-      <div className="proj-list">
-        <div className="list-head"><span className="eyebrow">Registered projects</span><span className="dim">{projects.length} total</span></div>
-        {projects.length===0?<div className="sec-empty pad">No projects yet — add your first one.</div>
-          :projects.map(p=>{
-            const t=totalsFor(p.id);
-            return(
-              <div className="proj-card" key={p.id}>
-                <div className="proj-top">
-                  <div>
-                    <div className="proj-name">{p.name}</div>
-                    {p.description&&<div className="proj-desc">{p.description}</div>}
-                  </div>
-                  {confirmId===p.id?(
-                    <span className="confirm">
-                      <button className="mini danger" onClick={()=>{deleteProject(p.id);setConfirmId(null);}}>Delete all</button>
-                      <button className="mini" onClick={()=>setConfirmId(null)}>Cancel</button>
-                    </span>
-                  ):(
-                    <button className="icon-btn" aria-label="Delete project" onClick={()=>setConfirmId(p.id)}><Trash2 size={15}/></button>
-                  )}
-                </div>
-                <div className="proj-figs">
-                  <span className="mono rev">{fmt(t.revenue)}</span>
-                  <span className="sep">in</span>
-                  <span className="mono exp">{fmt(t.expense)}</span>
-                  <span className="sep">out</span>
-                  <span className={"mono net-fig "+(t.net>=0?"rev":"exp")}>{fmt(t.net)} net</span>
-                  <span className="proj-count">{t.count} {t.count===1?"receipt":"receipts"}</span>
-                </div>
-              </div>
-            );
-          })}
+      <div className="items-section">
+        <div className="items-head">
+          <span className="block-label">Line items</span>
+          <span className="item-count">{items.length} {items.length===1?"item":"items"}</span>
+        </div>
+        <div className="items-list">
+          {items.map((item,idx)=>(
+            <ItemRow key={item.id} item={item} idx={idx}
+              onChange={updateItem} onRemove={removeItem} canRemove={items.length>1}
+              error={errors.items?.[idx]}/>
+          ))}
+        </div>
+        <button className="add-item-btn" onClick={addItem}><Plus size={15}/> Add another item</button>
+      </div>
+
+      <div className="vendor-block">
+        <div className="block-head"><Store size={14}/> Vendor / Party</div>
+        <Field label="Vendor name">
+          <input className="input" value={vendorName} placeholder="Who you paid / who paid you"
+            onChange={e=>setVendorName(e.target.value)}/>
+        </Field>
+        <div className="row2">
+          <Field label="Contact">
+            <input className="input" value={vendorContact} placeholder="Phone, email or TIN"
+              onChange={e=>setVendorContact(e.target.value)}/>
+          </Field>
+          <Field label="Address">
+            <input className="input" value={vendorAddress} placeholder="City / address"
+              onChange={e=>setVendorAddress(e.target.value)}/>
+          </Field>
+        </div>
+      </div>
+
+      <Field label="Notes (optional)">
+        <textarea className="input textarea" rows={2} value={notes}
+          placeholder="Anything worth remembering about this receipt"
+          onChange={e=>setNotes(e.target.value)}/>
+      </Field>
+
+      <div className="form-foot">
+        <div className="foot-total">
+          <span className="eyebrow">Receipt total · {items.length} {items.length===1?"item":"items"}</span>
+          <span className={"foot-amt "+entry.type}>{receiptTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+        </div>
+        <div className="editor-actions">
+          <button className="btn btn-ghost" onClick={onCancel}>Cancel</button>
+          <button className="btn btn-primary" onClick={save}><Check size={16}/> Save changes</button>
+        </div>
       </div>
     </div>
   );
@@ -717,6 +1030,7 @@ function Styles(){
 /* tabs */
 .tabs{display:flex;gap:4px;background:var(--soft);border:1px solid var(--rule);border-radius:13px;padding:4px;margin-bottom:20px;overflow-x:auto}
 .tab{flex:1;min-width:fit-content;display:flex;align-items:center;justify-content:center;gap:7px;padding:10px 14px;border:none;background:transparent;color:var(--muted);font-family:inherit;font-size:13.5px;font-weight:600;border-radius:9px;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
+.tab.wide{flex:2}
 .tab:hover{color:var(--ink)}
 .tab.active{background:var(--surface);color:var(--brand);box-shadow:0 1px 2px rgba(22,48,43,.1)}
 
@@ -730,6 +1044,8 @@ function Styles(){
 /* fields */
 .field{display:block;margin-bottom:14px}
 .field.compact{margin-bottom:10px}
+.field-link{display:inline-flex;align-items:center;gap:4px;margin-top:7px;padding:0;border:none;background:none;font-family:inherit;font-size:12px;font-weight:600;color:var(--brand-2);cursor:pointer}
+.field-link:hover{color:var(--brand)}
 .label{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--ink);margin-bottom:6px}
 .label .err{color:var(--exp);font-style:normal;font-size:11.5px;font-weight:500}
 .input{width:100%;padding:11px 13px;border:1px solid var(--rule);border-radius:10px;background:#fff;color:var(--ink);font-size:14px;font-weight:500;transition:border-color .15s,box-shadow .15s}
@@ -744,8 +1060,8 @@ function Styles(){
 /* segmented control */
 .seg{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:var(--soft);border:1px solid var(--rule);border-radius:11px;padding:4px;margin-bottom:18px}
 .seg-btn{display:flex;align-items:center;justify-content:center;gap:7px;padding:11px;border:none;background:transparent;color:var(--muted);font-family:inherit;font-size:14px;font-weight:600;border-radius:8px;cursor:pointer;transition:all .15s}
-.seg-btn.on.exp{background:#fff;color:var(--exp);box-shadow:0 1px 2px rgba(178,92,54,.2)}
-.seg-btn.on.rev{background:#fff;color:var(--rev);box-shadow:0 1px 2px rgba(21,113,96,.2)}
+.seg-btn.on.exp{background:var(--exp);color:#fff;box-shadow:0 2px 6px rgba(178,92,54,.35)}
+.seg-btn.on.rev{background:var(--rev);color:#fff;box-shadow:0 2px 6px rgba(21,113,96,.35)}
 
 /* items section */
 .items-section{border:1px solid var(--rule);border-radius:13px;overflow:hidden;margin-bottom:16px;background:var(--soft)}
@@ -782,13 +1098,43 @@ function Styles(){
 .btn.full{width:100%}
 
 /* pills */
-.pill-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
 .pill{padding:8px 14px;border:1px solid var(--rule);background:var(--surface);color:var(--muted);border-radius:99px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
 .pill:hover{color:var(--ink)}
 .pill.on{background:var(--brand);color:#eef5f2;border-color:var(--brand)}
 
+/* ledger layout */
+.ledger-shell{position:relative;min-height:60px}
+.ledger-shell:not(.is-selected){min-height:420px}
+.ledger-projects{
+  display:flex;flex-direction:column;gap:8px;
+  position:absolute;top:0;left:50%;transform:translateX(-50%);width:380px;
+  transition:left .45s cubic-bezier(.22,1,.36,1),transform .45s cubic-bezier(.22,1,.36,1),width .45s cubic-bezier(.22,1,.36,1),padding .45s ease;
+}
+.ledger-projects.intro{padding:22px;border:1px solid var(--rule);border-radius:16px;background:var(--surface);box-shadow:0 4px 24px rgba(22,48,43,.06);top:40px}
+.ledger-shell.is-selected .ledger-projects{left:0;transform:translateX(0);width:240px;padding:0}
+.ledger-projects .pill{width:100%;text-align:left;border-radius:10px}
+.ledger-content{
+  margin-left:258px;opacity:1;
+  animation:ledgerFadeIn .5s ease .12s backwards;
+}
+.lp-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px}
+.lp-sort{display:inline-flex;align-items:center;gap:5px;color:var(--muted);cursor:pointer}
+.lp-sort select{border:none;background:none;font-family:inherit;font-size:11px;font-weight:600;color:var(--muted);cursor:pointer;text-transform:uppercase;letter-spacing:.06em;padding:0}
+.lp-sort:hover{color:var(--brand-2)}
+.lp-row{display:flex;align-items:center;gap:6px}
+.lp-row .pill{flex:1;min-width:0}
+.lp-del{width:26px;height:26px;flex-shrink:0}
+.lp-add{display:flex;align-items:center;justify-content:center;gap:7px;padding:10px;border:1px dashed var(--rule);background:none;color:var(--brand-2);border-radius:10px;font-family:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
+.lp-add:hover{background:var(--soft)}
+.lp-add-form{border:1px solid var(--rule);border-radius:12px;padding:14px;background:var(--surface);margin-top:8px}
+.lp-add-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:4px}
+.ledger-empty-onboard{display:flex;flex-direction:column;gap:18px;max-width:420px;margin:0 auto}
+
+@keyframes ledgerFadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+
 /* ledger summary */
-.ledger-summary{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap}
+.ledger-summary{display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;align-items:flex-start;padding:14px 18px;margin-bottom:10px}
+.ls-actions{display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap}
 .ls-name h2{margin:6px 0 0;font-size:22px;letter-spacing:-.02em}
 .ls-figs{display:flex;gap:26px;align-items:flex-end;flex-wrap:wrap}
 .ls-fig{display:flex;flex-direction:column;gap:5px;font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:600}
@@ -798,60 +1144,53 @@ function Styles(){
 .rev-dot{background:var(--rev)}.exp-dot{background:var(--exp)}
 
 /* ledger sections */
-.ledger-sec{margin-bottom:18px;border:1px solid var(--rule);border-radius:14px;overflow:hidden;background:var(--surface)}
+.ledger-sec{margin-bottom:10px;border:1px solid var(--rule);border-radius:12px;overflow:hidden;background:var(--surface)}
 .ledger-sec.rev{border-top:3px solid var(--rev)}
 .ledger-sec.exp{border-top:3px solid var(--exp)}
-.sec-head{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--rule)}
-.sec-head h3{margin:0;display:flex;align-items:center;gap:8px;font-size:15px;font-weight:600}
+.sec-head{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;border-bottom:1px solid var(--rule)}
+.sec-head h3{margin:0;display:flex;align-items:center;gap:7px;font-size:13.5px;font-weight:600}
 .ledger-sec.rev .sec-head h3{color:var(--rev)}.ledger-sec.exp .sec-head h3{color:var(--exp)}
-.sec-count{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:600}
-.sec-empty{padding:18px;color:var(--muted);font-size:13.5px}
-.sec-empty.pad{padding:24px}
+.sec-count{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);font-weight:600}
+.sec-empty{padding:12px 14px;color:var(--muted);font-size:13px}
+.sec-empty.pad{padding:20px}
 .rows{display:flex;flex-direction:column}
 .lrow-wrap{border-bottom:1px solid var(--soft)}
 .lrow-wrap:last-child{border-bottom:none}
-.lrow{display:flex;justify-content:space-between;gap:14px;padding:13px 18px}
+.lrow{display:flex;justify-content:space-between;gap:12px;padding:7px 14px}
 .lr-left{flex:1;min-width:0}
-.lr-title{font-size:14.5px;font-weight:600;letter-spacing:-.01em}
-.lr-meta{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:4px;font-size:12px;color:var(--muted)}
-.tagcat{background:var(--soft);padding:2px 8px;border-radius:6px;font-weight:600;font-size:11px;color:var(--brand-2)}
+.lr-title{font-size:13px;font-weight:600;letter-spacing:-.01em}
+.lr-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:1px;font-size:11px;color:var(--muted)}
+.tagcat{background:var(--soft);padding:1px 6px;border-radius:5px;font-weight:600;font-size:10px;color:var(--brand-2)}
 .dot{color:#c2c9c0}
-.lr-qty-hint{margin-top:4px;font-size:12px;color:var(--muted);font-family:'JetBrains Mono',monospace}
-.lr-note{margin-top:5px;font-size:12.5px;color:var(--muted);font-style:italic}
-.lr-right{display:flex;align-items:center;gap:12px;flex-shrink:0}
-.lr-amt{font-size:15px;font-weight:600}
-.icon-btn{width:30px;height:30px;display:grid;place-items:center;border:1px solid var(--rule);background:#fff;border-radius:8px;color:var(--muted);cursor:pointer;transition:all .15s}
+.lr-qty-hint{margin-top:1px;font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace}
+.lr-note{margin-top:2px;font-size:11.5px;color:var(--muted);font-style:italic}
+.lr-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.lr-right .no-print{display:inline-flex;align-items:center;gap:8px}
+.lr-amt{font-size:13.5px;font-weight:600}
+.icon-btn{width:24px;height:24px;display:grid;place-items:center;border:1px solid var(--rule);background:#fff;border-radius:7px;color:var(--muted);cursor:pointer;transition:all .15s}
 .icon-btn:hover{color:var(--exp);border-color:var(--exp)}
 .confirm{display:flex;gap:5px}
-.mini{padding:6px 10px;border:1px solid var(--rule);background:#fff;border-radius:7px;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;color:var(--ink)}
+.mini{padding:4px 8px;border:1px solid var(--rule);background:#fff;border-radius:6px;font-family:inherit;font-size:11px;font-weight:600;cursor:pointer;color:var(--ink)}
 .mini.danger{background:var(--exp);color:#fff;border-color:var(--exp)}
-.subtotal{display:flex;justify-content:space-between;align-items:center;padding:13px 18px;background:var(--soft);font-size:12px;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:var(--muted)}
-.subtotal b{font-size:16px;letter-spacing:-.01em;text-transform:none}
+.subtotal{display:flex;justify-content:space-between;align-items:center;padding:8px 14px;background:var(--soft);font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;font-weight:600;color:var(--muted)}
+.subtotal b{font-size:14px;letter-spacing:-.01em;text-transform:none}
+
+/* inline entry editor */
+.entry-editor{padding:18px;border-top:1px dashed var(--rule);background:#fafbf8}
+.editor-actions{display:flex;gap:10px}
 
 /* expand toggle */
-.expand-btn{display:inline-flex;align-items:center;gap:6px;background:none;border:none;font-family:inherit;font-size:14.5px;font-weight:600;color:var(--ink);cursor:pointer;padding:0;letter-spacing:-.01em}
-.expand-icon{font-size:12px;color:var(--muted)}
+.expand-btn{display:inline-flex;align-items:center;gap:7px;background:none;border:none;font-family:inherit;font-size:13px;font-weight:600;color:var(--ink);cursor:pointer;padding:0;letter-spacing:-.01em}
+.expand-icon{flex-shrink:0;width:16px;height:16px;border-radius:50%;background:var(--ink);color:#fff;font-size:9px;display:grid;place-items:center;line-height:1;transition:background .15s}
+.expand-btn:hover .expand-icon{background:var(--brand)}
 
 /* item breakdown */
-.item-breakdown{border-top:1px dashed var(--rule);margin:0 18px 6px;padding:8px 0 10px}
-.ibd-row{display:grid;grid-template-columns:20px 1fr auto auto;gap:8px;align-items:center;padding:5px 0;font-size:13px}
-.ibd-num{font-size:10px;font-weight:700;color:var(--muted);text-align:center;background:var(--soft);border-radius:4px;width:18px;height:18px;display:grid;place-items:center}
+.item-breakdown{border-top:1px dashed var(--rule);margin:0 14px 3px;padding:3px 0 5px}
+.ibd-row{display:grid;grid-template-columns:16px 1fr auto auto;gap:6px;align-items:center;padding:2px 0;font-size:12px}
+.ibd-num{font-size:9px;font-weight:700;color:var(--muted);text-align:center;background:var(--soft);border-radius:4px;width:15px;height:15px;display:grid;place-items:center}
 .ibd-name{font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ibd-qty{font-size:12px;white-space:nowrap}
-.ibd-total{font-size:13.5px;font-weight:600;text-align:right;white-space:nowrap}
-
-/* projects */
-.projects-grid{display:grid;grid-template-columns:360px 1fr;gap:18px;align-items:start}
-.proj-list{display:flex;flex-direction:column;gap:12px}
-.list-head{display:flex;justify-content:space-between;align-items:center;padding:0 4px 2px}
-.proj-card{background:var(--surface);border:1px solid var(--rule);border-radius:13px;padding:16px 18px}
-.proj-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
-.proj-name{font-size:16px;font-weight:600;letter-spacing:-.01em}
-.proj-desc{font-size:13px;color:var(--muted);margin-top:3px;line-height:1.45}
-.proj-figs{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;font-size:13.5px}
-.proj-figs .sep{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-right:4px}
-.net-fig{font-weight:600;margin-left:auto}
-.proj-count{width:100%;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:2px;font-weight:600}
+.ibd-qty{font-size:11px;white-space:nowrap}
+.ibd-total{font-size:12.5px;font-weight:600;text-align:right;white-space:nowrap}
 
 /* overview */
 .hero{display:flex;flex-direction:column;gap:14px}
@@ -889,7 +1228,9 @@ function Styles(){
 
 @media(max-width:760px){
   .app{padding:14px}
-  .projects-grid{grid-template-columns:1fr}
+  .ledger-shell:not(.is-selected){min-height:0}
+  .ledger-projects,.ledger-projects.intro{position:static;transform:none;width:100%;margin-bottom:12px;top:auto;left:auto}
+  .ledger-content{margin-left:0}
   .row3{grid-template-columns:1fr 1fr}
   .ls-figs{gap:18px}
   .hero-num{font-size:36px}
@@ -900,6 +1241,14 @@ function Styles(){
   .ibd-qty{display:none}
 }
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+@media print{
+  body *{visibility:hidden}
+  #ledger-print-area,#ledger-print-area *{visibility:visible}
+  #ledger-print-area{position:absolute;left:0;top:0;width:100%}
+  .no-print,.no-print *{display:none!important}
+  .app{padding:0;max-width:none}
+}
 `}</style>
   );
 }
